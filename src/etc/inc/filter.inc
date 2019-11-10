@@ -843,3 +843,76 @@ function get_protocols()
     }
     return $protocols;
 }
+
+function get_icmptypes($raw = false)
+{
+    // Get ICMP types data. if $raw is true, just return the basiuc raw table
+    $icmptypes_raw = array(
+        'althost'    => array('descrip' => 'Alternate host address (Deprecated)', 'valid4' => true, 'valid6' => false), 
+         'dataconv'    => array('descrip' => 'Datagram conversion error', 'valid4' => true, 'valid6' => false), 
+         'echorep'    => array('descrip' => 'Echo reply', 'valid4' => true, 'valid6' => true), 
+         'echoreq'    => array('descrip' => 'Echo request', 'valid4' => true, 'valid6' => true), 
+         'fqdnrep'    => array('descrip' => 'FQDN reply', 'valid4' => false, 'valid6' => true), 
+         'fqdnreq'    => array('descrip' => 'FQDN query: Something is wrong', 'valid4' => false, 'valid6' => true), 
+         'groupqry'    => array('descrip' => 'Group membership query: Something is wrong', 'valid4' => false, 'valid6' => true), 
+         'grouprep'    => array('descrip' => 'Group membership report', 'valid4' => false, 'valid6' => true), 
+         'groupterm'    => array('descrip' => 'Group membership termination', 'valid4' => false, 'valid6' => true), 
+         'inforep'    => array('descrip' => 'Information reply (Deprecated)', 'valid4' => true, 'valid6' => false), 
+         'inforeq'    => array('descrip' => 'Information request (Deprecated)', 'valid4' => true, 'valid6' => false), 
+         'ipv6-here'    => array('descrip' => 'I-am-here reply', 'valid4' => true, 'valid6' => false), 
+         'ipv6-where'    => array('descrip' => 'Where-are-you request', 'valid4' => true, 'valid6' => false), 
+         'listendone'    => array('descrip' => 'Multicast listener done', 'valid4' => false, 'valid6' => true), 
+         'listenrep'    => array('descrip' => 'Multicast listener report', 'valid4' => false, 'valid6' => true), 
+         'listqry'    => array('descrip' => 'Multicast listener Something is wrong', 'valid4' => false, 'valid6' => true), 
+         'maskrep'    => array('descrip' => 'Address mask reply (Deprecated)', 'valid4' => true, 'valid6' => false), 
+         'maskreq'    => array('descrip' => 'Address mask request (Deprecated)', 'valid4' => true, 'valid6' => false), 
+         'mobredir'    => array('descrip' => 'Mobile host redirect', 'valid4' => true, 'valid6' => false), 
+         'mobregrep'    => array('descrip' => 'Mobile registration reply', 'valid4' => true, 'valid6' => false), 
+         'mobregreq'    => array('descrip' => 'Mobile registration request', 'valid4' => true, 'valid6' => false), 
+         'mtrace'    => array('descrip' => 'mtrace messages', 'valid4' => false, 'valid6' => true), 
+         'mtraceresp'    => array('descrip' => 'mtrace response', 'valid4' => false, 'valid6' => true), 
+         'neighbradv'    => array('descrip' => 'Neighbor advertisement', 'valid4' => false, 'valid6' => true), 
+         'neighbrsol'    => array('descrip' => 'Neighbor solicitation', 'valid4' => false, 'valid6' => true), 
+         'niqry'        => array('descrip' => 'Node information request', 'valid4' => false, 'valid6' => true), 
+         'nirep'        => array('descrip' => 'Node information reply', 'valid4' => false, 'valid6' => true), 
+         'paramprob'    => array('descrip' => 'Parameter problem (invalid IP header)', 'valid4' => true, 'valid6' => true), 
+         'photuris'    => array('descrip' => 'Photuris', 'valid4' => true, 'valid6' => false), 
+         'redir'        => array('descrip' => 'Redirect / Shorter route exists', 'valid4' => true, 'valid6' => true), 
+         'routeradv'    => array('descrip' => 'Router advertisement', 'valid4' => true, 'valid6' => true), 
+         'routersol'    => array('descrip' => 'Router solicitation', 'valid4' => true, 'valid6' => true), 
+         'routrrenum'    => array('descrip' => 'Router renumbering', 'valid4' => false, 'valid6' => true), 
+         'skip'        => array('descrip' => 'SKIP', 'valid4' => true, 'valid6' => false), 
+         'squench'    => array('descrip' => 'Source quench (Deprecated)', 'valid4' => true, 'valid6' => false), 
+         'timerep'    => array('descrip' => 'Timestamp reply', 'valid4' => true, 'valid6' => false), 
+         'timereq'    => array('descrip' => 'Timestamp', 'valid4' => true, 'valid6' => false), 
+         'timex'        => array('descrip' => 'Time exceeded', 'valid4' => true, 'valid6' => true), 
+         'toobig'    => array('descrip' => 'Packet too big', 'valid4' => false, 'valid6' => true), 
+         'trace'        => array('descrip' => 'Traceroute', 'valid4' => true, 'valid6' => false), 
+         'unreach'    => array('descrip' => 'Destination unreachable', 'valid4' => true, 'valid6' => true), 
+         'wrurep'    => array('descrip' => 'Who-are-you reply', 'valid4' => false, 'valid6' => true), 
+         'wrureq'    => array('descrip' => 'Who-are-you request', 'valid4' => false, 'valid6' => true) 
+    );
+
+    if ($raw) {
+        return $icmptypes_raw;
+    }
+    
+    /* build icmptypes lookup table from the above */
+    foreach ($icmptypes_raw as $k => $v) {
+        if ($v['valid4'] && !$v['valid6']) {
+            $valid4[$k] = $v['descrip'];
+        } elseif (!$v['valid4'] && $v['valid6']) {
+            $valid6[$k] = $v['descrip'];
+        } elseif ($v['valid4'] && $v['valid6']) {
+            $valid4[$k] = $valid6[$k] = $valid46[$k] = $v['descrip'];
+        }
+    }
+
+    $icmptypes = array(
+        'inet' => array('ipproto_name' => 'IPv4', 'ipproto_shortname' => 'IPv4', 'valid' => $valid4),
+        'inet6' => array('ipproto_name' => 'IPv6', 'ipproto_shortname' => 'IPv6', 'valid' => $valid6),
+        'inet46' => array('ipproto_name' => 'IPv4+IPv6', 'ipproto_shortname' => 'IPv4+6', 'valid' => $valid46)
+    );
+
+    return $icmptypes;
+}
