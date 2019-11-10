@@ -40,8 +40,10 @@ $ostypes = json_decode(configd_run('filter list osfp json'));
 if ($ostypes == null) {
     $ostypes = array();
 }
+$ipprotocols = array('inet', 'inet6', 'inet46');
 $gateways = new \OPNsense\Routing\Gateways(legacy_interfaces_details());
-
+$interfaces = legacy_config_get_interfaces(array("enable" => true));
+$icmptypes = get_icmptypes();
 
 /**
  * check if advanced options are set on selected element
@@ -74,9 +76,10 @@ function is_posnumericint($arg) {
     return (is_numericint($arg) && $arg[0] != '0' && $arg > 0);
 }
 
-
 $a_filter = &config_read_array('filter', 'rule');
 
+// Whether POST or GET, the URL should still have a valid $_GET['id'] field controlling the interface edited
+$interface_from_url = (empty($_GET['if']) || !is_string($_GET['if'])) ? "" : $_GET['if'];
 
 if ($_SERVER['REQUEST_METHOD'] === 'GET') {
     // input record id, if valid
@@ -100,7 +103,6 @@ if ($_SERVER['REQUEST_METHOD'] === 'GET') {
         'floating',
         'gateway',
         'icmptype',
-        'icmp6-type',
         'interface',
         'ipprotocol',
         'log',
@@ -151,15 +153,19 @@ if ($_SERVER['REQUEST_METHOD'] === 'GET') {
             // do not link on rule copy.
             $pconfig['associated-rule-id'] = $a_filter[$configId]['associated-rule-id'];
         }
+        // icmptype stored as string. processed on this page as an array. Convert it.
+        if (empty($pconfig['icmptype'])) {
+            $pconfig['icmptype'] = array();
+        } else {
+            $pconfig['icmptype'] = explode(',', $pconfig['icmptype']);
+        }
     } else {
         /* defaults */
-        if (isset($_GET['if'])) {
-            if ($_GET['if'] == "FloatingRules" ) {
-                $pconfig['floating'] = true;
-                $pconfig['quick'] = true;
-            } else {
-                $pconfig['interface'] = $_GET['if'];
-            }
+        if ($interface_from_url == "FloatingRules" ) {
+            $pconfig['floating'] = true;
+            $pconfig['quick'] = true;
+        } elseif (!empty($interface_from_url)) {
+            $pconfig['interface'] = $interface_from_url;
         }
         $pconfig['src'] = "any";
         $pconfig['dst'] = "any";
@@ -217,6 +223,62 @@ if ($_SERVER['REQUEST_METHOD'] === 'GET') {
 
     do_input_validation($_POST, $reqdfields, $reqdfieldsn, $input_errors);
 
+        // Validate interfaces and convert to always be an array if not already one
+
+        // if interface data is a string containing a single interface, convert to a single-item array
+        if (is_string($pconfig['interface']) && $pconfig['interface'] != "") {
+            $pconfig['interface'] = array($pconfig['interface']);
+        } elseif (!is_array($pconfig['interface'])) {
+            $pconfig['interface'] = array();
+        }
+        // check that interface list contains one or more values, and they are all valid interfaces
+        if (count($pconfig['interface']) ==  0) {
+            $input_errors[] = gettext('At least one interface must be selected.');
+        } else {
+            foreach ($pconfig['interface'] as $v) {
+                if (!array_key_exists($v, $interfaces)) {
+                    $input_errors[] = gettext('An invalid interface is selected.');
+                    break;
+                }
+            }
+        }
+
+        // check that interface list is consistent with the interface selected for edit in the URL
+        if ($interface_from_url != "FloatingRules" && !(count($pconfig['interface']) == 1 && $interface_from_url == $pconfig['interface'][0])) {
+            // Note that the last condition inherently checks $interface_from_url is a valid interface.
+            $input_errors[] = gettext("The interface selected has been modified and the page must be reloaded. Please click 'cancel', and re-open this page.");
+        }
+        if ($interface_from_url == "FloatingRules" xor !empty($pconfig['floating'])) {
+            // 'if=FloatingRules' in the URL isn't consistent with the 'floating' field in $_POST. Should both be present or both absent.
+            $input_errors[] = gettext("The interface selected has been modified and the page must be reloaded. Please click 'cancel', and re-open this page.");
+        }
+
+        // Validate ipprotocol
+        if (!in_array($pconfig['ipprotocol'], $ipprotocols)) {
+            $input_errors[] = gettext('A valid IP Protocol must be selected.');
+        } 
+
+    // if icmp, now that ipproto is validated, import the correct one of icmptypes_inet4/6/46 into icmptypes and unset the original icmptype_* variables
+    // and also validate icmptype. The 'any' option should never be returned, as it triggers "deselect all".
+    unset($pconfig['icmptype']);
+    if ($pconfig['protocol'] == 'icmp') {
+        $formfield = "icmptype_" . $pconfig['ipprotocol'];
+        if (is_array($pconfig[$formfield])) {
+            $pconfig['icmptype'] = $pconfig[$formfield];
+        } else {
+            $pconfig['icmptype'] = array();
+        }
+        $p = $pconfig['ipprotocol'];
+        foreach ($pconfig['icmptype'] as $type) {
+            if (!is_string($type) || !array_key_exists($type, $icmptypes[$p]['valid'])) {
+                $input_errors[] = gettext("Invalid ICMP types are selected.");
+                $pconfig['icmptype'] = array();
+                break;
+            }
+        }
+    }
+    unset($pconfig['icmptype_inet'], $pconfig['icmptype_inet6'], $pconfig['icmptype_inet46']);
+
     if ($pconfig['ipprotocol'] == "inet46" && !empty($pconfig['gateway'])) {
         $input_errors[] = gettext("You can not assign a gateway to a rule that applies to IPv4 and IPv6");
     }
@@ -236,11 +298,6 @@ if ($_SERVER['REQUEST_METHOD'] === 'GET') {
         if ($pconfig['ipprotocol'] == "inet" && !is_ipaddrv4($gateways->getAddress($pconfig['gateway']))) {
             $input_errors[] = gettext('You can not assign the IPv6 Gateway to an IPv4 filter rule.');
         }
-    }
-    if ($pconfig['protocol'] == "icmp" && !empty($pconfig['icmptype']) && $pconfig['ipprotocol'] == "inet46") {
-        $input_errors[] =  gettext('You can not assign an ICMP type to a rule that applies to IPv4 and IPv6.');
-    } elseif ($pconfig['protocol'] == "ipv6-icmp" && !empty($pconfig['icmp6-type']) && $pconfig['ipprotocol'] == "inet46") {
-        $input_errors[] =  gettext('You can not assign an ICMP type to a rule that applies to IPv4 and IPv6.');
     }
     if ($pconfig['statetype'] == "synproxy state" || $pconfig['statetype'] == "modulate state") {
         if ($pconfig['protocol'] != "tcp") {
@@ -411,7 +468,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'GET') {
     if (count($input_errors) == 0) {
         $filterent = array();
         // 1-on-1 copy of form values
-        $copy_fields = array('type', 'interface', 'ipprotocol', 'tag', 'tagged', 'max', 'max-src-nodes'
+        $copy_fields = array('type', 'interface', 'ipprotocol', 'icmptype', 'tag', 'tagged', 'max', 'max-src-nodes'
                             , 'max-src-conn', 'max-src-states', 'statetimeout', 'statetype', 'os', 'descr', 'gateway'
                             , 'sched', 'associated-rule-id', 'direction'
                             , 'max-src-conn-rate', 'max-src-conn-rates', 'category') ;
@@ -490,12 +547,6 @@ if ($_SERVER['REQUEST_METHOD'] === 'GET') {
             $filterent['protocol'] = $pconfig['protocol'];
         }
 
-        if ($pconfig['protocol'] == "icmp" && !empty($pconfig['icmptype'])) {
-            $filterent['icmptype'] = $pconfig['icmptype'];
-        } elseif ($pconfig['protocol'] == 'ipv6-icmp' && !empty($pconfig['icmp6-type'])) {
-            $filterent['icmp6-type'] = $pconfig['icmp6-type'];
-        }
-
         // reset port values for non tcp/udp traffic
         if (($pconfig['protocol'] != "tcp") && ($pconfig['protocol'] != "udp") && ($pconfig['protocol'] != "tcp/udp")) {
             $pconfig['srcbeginport'] = 0;
@@ -531,12 +582,13 @@ if ($_SERVER['REQUEST_METHOD'] === 'GET') {
         }
         // sort filter items per interface, not really necessary but leaves a bit nicer sorted config.xml behind.
         filter_rules_sort();
+
         // write to config
         write_config();
         mark_subsystem_dirty('filter');
 
         header(url_safe('Location: /firewall_rules.php?if=%s', array(
-            !empty($pconfig['floating']) ? 'FloatingRules' : $pconfig['interface']
+            !empty($pconfig['floating']) ? 'FloatingRules' : $interface_from_url
         )));
         exit;
     }
@@ -553,6 +605,45 @@ include("head.inc");
 <body>
   <script>
   $( document ).ready(function() {
+
+
+      var icmp_lists = [ 'icmptype_inet', 'icmptype_inet6', 'icmptype_inet46' ];
+
+      // Update ICMP types available for current IP protocol, copying over any still-valid selections
+      function icmptype_visibility_update() {
+            $('#icmpbox_inet').addClass("hidden");
+            $('#icmpbox_inet6').addClass("hidden");
+            $('#icmpbox_inet46').addClass("hidden");
+            if ($('#proto').val() == 'icmp') {
+              var boxid = '#icmpbox_' + $('#ipprotocol').val();
+              $(boxid).removeClass("hidden");
+            }
+      }
+
+      function icmptype_selection_update() {
+            var listid = '#icmptype_' + $('#ipprotocol').val() + "_list";
+            var current_sel = $(listid).val() || ['any']; // Ensures we get correct array when none selected
+            if (jQuery.inArray('any', current_sel) >= 0) {
+                  // "any" negates all selections
+									$(listid).selectpicker('deselectAll');
+       						$(listid).selectpicker('refresh');
+            }
+            var current_sel = $(listid).val() || [];
+            // and duplicate the selection to all lists so far as valid
+            for (i=0; i< 3; ++i) {
+              var listid2 = '#' + icmp_lists[i] + '_list';
+              if (listid2 != listid) {
+                var list2opts = $(listid2 + ' option');
+                var list2vals = $.map(list2opts, function(opt) { return opt.value; } );
+	    					$(listid2).selectpicker('deselectAll');
+                if (current_sel.length > 0) {
+                  $(listid2).selectpicker('val', current_sel);
+                }
+     						$(listid2).selectpicker('refresh');
+              }
+            }
+      }
+
       // show source fields (advanced)
       $("#showadvancedboxsrc").click(function(){
           $(".advanced_opt_src").toggleClass("hidden visible");
@@ -599,14 +690,17 @@ include("head.inc");
           }
       });
 
+
+      // on ipprotocol change, update icmpbox_inet4/6/46 visibility, and remove any icmptypes now invalid due to the change in ipprotocol
+      $("#ipprotocol").change(function() {
+          icmptype_visibility_update();
+          icmptype_selection_update();
+      });
+
       $("#proto").change(function() {
-          $("#icmpbox").addClass("hidden");
-          $("#icmp6box").addClass("hidden");
-          if ( $("#proto").val() == 'icmp' ) {
-              $("#icmpbox").removeClass("hidden");
-          } else if ( $("#proto").val() == 'ipv6-icmp' ) {
-              $("#icmp6box").removeClass("hidden");
-          }
+          // icmpbox may need show/hide, and if ipproto has changed, may need resyncing
+          icmptype_visibility_update();
+          icmptype_selection_update();
           let port_disabled = true;
           // lock src/dst ports on other then tcp/udp
           if ($("#proto").val() == 'tcp' || $("#proto").val() == 'udp' || $("#proto").val() == 'tcp/udp') {
@@ -628,8 +722,30 @@ include("head.inc");
           } else {
               $(".input_tcpflags_any,.input_flags").prop('disabled', true);
           }
-
       });
+
+      // re-sync icmptype_inet4/6/46-lists when the current one changes
+      $("#icmptype_inet_list").change(function() {
+          // icmp types selector may need to reflect inet/inet6/inet46?
+          if ($('#ipprotocol').val() == 'inet') {
+            icmptype_selection_update();
+          }
+      });
+      $("#icmptype_inet6_list").change(function() {
+          // icmp types selector may need to reflect inet/inet6/inet46?
+          if ($('#ipprotocol').val() == 'inet6') {
+            icmptype_selection_update();
+          }
+      });
+      $("#icmptype_inet46_list").change(function() {
+          // icmp types selector may need to reflect inet/inet6/inet46?
+          if ($('#ipprotocol').val() == 'inet46') {
+            icmptype_selection_update();
+          }
+      });
+
+
+
 
       // IPv4/IPv6 select
       hook_ipv4v6('ipv4v6net', 'network-id');
@@ -778,38 +894,36 @@ include("head.inc");
                     </td>
                   </tr>
 <?php
-                  endif; ?>
-                  <tr>
-                    <td><a id="help_for_interface" href="#" class="showhelp"><i class="fa fa-info-circle"></i></a> <?=gettext("Interface");?></td>
-                    <td>
+                  endif;
+                  if (!empty($pconfig['floating'])): ?>
+                      <tr>
+                        <td><a id="help_for_interface" href="#" class="showhelp"><i class="fa fa-info-circle"></i></a> <?=gettext("Interface");?></td>
+                        <td>
+                          <select name="interface[]" title="Select interfaces..." multiple="multiple" class="selectpicker" data-live-search="true" data-size="5" tabindex="2" <?=!empty($pconfig['associated-rule-id']) ? "disabled" : "";?>>
+<?php    
+                        foreach ($interfaces as $iface => $ifdetail): ?>
+                            <option value="<?=$iface;?>"
+                                <?= !empty($pconfig['interface']) && (
+                                      $iface == $pconfig['interface'] ||
+                                      // match floating / multiple interfaces
+                                      (!is_array($pconfig['interface']) && in_array($iface, explode(',', $pconfig['interface']))) ||
+                                      (is_array($pconfig['interface']) && in_array($iface, $pconfig['interface']))
+                                    ) ? 'selected="selected"' : ''; ?>>
+                              <?= htmlspecialchars($ifdetail['descr']) ?>
+                            </option>
 <?php
-                    if (!empty($pconfig['floating'])): ?>
-                      <select name="interface[]" title="Select interfaces..." multiple="multiple" class="selectpicker" data-live-search="true" data-size="5" tabindex="2" <?=!empty($pconfig['associated-rule-id']) ? "disabled" : "";?>>
+                        endforeach; ?>
+                            </select>
+                            <div class="hidden" data-for="help_for_interface">
+                              <?=gettext("Choose on which interface packets must come in to match this rule.");?>
+                            </div>
+                        </td>
+                      </tr>
 <?php
-                    else: ?>
-                      <select name="interface" class="selectpicker" data-live-search="true" data-size="5" <?=!empty($pconfig['associated-rule-id']) ? "disabled" : "";?>>
+                  else: ?>
+                        <input type='hidden' name="interface" value="<?=$interface_from_url?>" />
 <?php
-                    endif;
-
-                    foreach (legacy_config_get_interfaces(array("enable" => true)) as $iface => $ifdetail): ?>
-                        <option value="<?=$iface;?>"
-                            <?= !empty($pconfig['interface']) && (
-                                  $iface == $pconfig['interface'] ||
-                                  // match floating / multiple interfaces
-                                  (!is_array($pconfig['interface']) && in_array($iface, explode(',', $pconfig['interface']))) ||
-                                  (is_array($pconfig['interface']) && in_array($iface, $pconfig['interface']))
-                                ) ? 'selected="selected"' : ''; ?>>
-                          <?= htmlspecialchars($ifdetail['descr']) ?>
-                        </option>
-<?php
-                    endforeach; ?>
-                        </select>
-                        <div class="hidden" data-for="help_for_interface">
-                          <?=gettext("Choose on which interface packets must come in to match this rule.");?>
-                        </div>
-                    </td>
-                  </tr>
-<?php
+                  endif;
                   // XXX: for legacy compatibility we keep supporting "any" on floating rules, regular rules should choose
                   $direction_options = !empty($pconfig['floating']) ? array('in','out', 'any') : array('in','out');?>
                   <tr>
@@ -833,7 +947,7 @@ include("head.inc");
                   <tr>
                     <td><a id="help_for_ipv46" href="#" class="showhelp"><i class="fa fa-info-circle"></i></a> <?=gettext("TCP/IP Version");?></td>
                     <td>
-                      <select name="ipprotocol" class="selectpicker" data-live-search="true" data-size="5" >
+                      <select id="ipprotocol" name="ipprotocol" class="selectpicker" data-live-search="true" data-size="5" >
 <?php
                       foreach (array('inet' => 'IPv4','inet6' => 'IPv6', 'inet46' => 'IPv4+IPv6' ) as $proto => $name): ?>
                       <option value="<?=$proto;?>" <?= $proto == $pconfig['ipprotocol'] ? "selected=\"selected\"" : "";?>>
@@ -865,90 +979,27 @@ include("head.inc");
                       </div>
                     </td>
                   </tr>
-                  <tr id="icmpbox">
-                    <td><a id="help_for_icmptype" href="#" class="showhelp"><i class="fa fa-info-circle"></i></a> <?=gettext("ICMP type");?></td>
-                    <td>
-                      <select <?=!empty($pconfig['associated-rule-id']) ? "disabled" : "";?> name="icmptype" class="selectpicker" data-live-search="true" data-size="5" >
 <?php
-                      $icmptypes = array(
-                      "" => gettext("any"),
-                      "echoreq" => gettext("Echo Request"),
-                      "echorep" => gettext("Echo Reply"),
-                      "unreach" => gettext("Destination Unreachable"),
-                      "squench" => gettext("Source Quench (Deprecated)"),
-                      "redir" => gettext("Redirect"),
-                      "althost" => gettext("Alternate Host Address (Deprecated)"),
-                      "routeradv" => gettext("Router Advertisement"),
-                      "routersol" => gettext("Router Solicitation"),
-                      "timex" => gettext("Time Exceeded"),
-                      "paramprob" => gettext("Parameter Problem"),
-                      "timereq" => gettext("Timestamp"),
-                      "timerep" => gettext("Timestamp Reply"),
-                      "inforeq" => gettext("Information Request (Deprecated)"),
-                      "inforep" => gettext("Information Reply (Deprecated)"),
-                      "maskreq" => gettext("Address Mask Request (Deprecated)"),
-                      "maskrep" => gettext("Address Mask Reply (Deprecated)")
-                      );
-
-                      foreach ($icmptypes as $icmptype => $descr): ?>
-                        <option value="<?=$icmptype;?>" <?= $icmptype == $pconfig['icmptype'] ? "selected=\"selected\"" : ""; ?>>
-                          <?=$descr;?>
-                        </option>
+                  foreach ($ipprotocols as $p): ?>
+                    <tr id="icmpbox_<?=$p;?>"<?=($pconfig['protocol'] == 'icmp' && $p == $pconfig['ipprotocol'] ) ? "" : " class='hidden'";?>>
+                      <td><a id="help_for_icmptype_<?=$p;?>" href="#" class="showhelp"><i class="fa fa-info-circle"></i></a> <?=sprintf(gettext("ICMP types for %s"), $icmptypes[$p]['ipproto_name']);?></td>
+                      <td>
+                        <select <?=!empty($pconfig['associated-rule-id']) ? "disabled" : "";?> name="icmptype_<?=$p?>[]" id="icmptype_<?=$p?>_list" multiple="multiple" class="selectpicker" data-live-search="true" data-size="8" >
+                          <option value="any">any</option>
 <?php
-                      endforeach; ?>
-                      </select>
-                      <div class="hidden" data-for="help_for_icmptype">
-                        <?=gettext("If you selected ICMP for the protocol above, you may specify an ICMP type here.");?>
-                      </div>
-                    </td>
-                  </tr>
-                  <tr id="icmp6box">
-                    <td><a id="help_for_icmp6-type" href="#" class="showhelp"><i class="fa fa-info-circle"></i></a> <?=gettext("ICMP6 type");?></td>
-                    <td>
-                      <select <?=!empty($pconfig['associated-rule-id']) ? "disabled" : "";?> name="icmp6-type" class="selectpicker" data-live-search="true" data-size="5" >
+                        foreach ($icmptypes[$p]['valid'] as $type => $descr): ?>
+                          <option value="<?=$type;?>" <?= in_array($type, $pconfig['icmptype']) ? "selected=\"selected\"" : ""; ?>><?=$descr;?></option>
 <?php
-                      $icmp6types = array(
-                          "" => gettext("any"),
-                          "unreach" => gettext("Destination unreachable"),
-                          "toobig" => gettext("Packet too big"),
-                          "timex" => gettext("Time exceeded"),
-                          "paramprob" => gettext("Invalid IPv6 header"),
-                          "echoreq" => gettext("Echo service request"),
-                          "echorep" => gettext("Echo service reply"),
-                          "groupqry" => gettext("Group membership query"),
-                          "listqry" => gettext("Multicast listener query"),
-                          "grouprep" => gettext("Group membership report"),
-                          "listenrep" => gettext("Multicast listener report"),
-                          "groupterm" => gettext("Group membership termination"),
-                          "listendone" => gettext("Multicast listener done"),
-                          "routersol" => gettext("Router solicitation"),
-                          "routeradv" => gettext("Router advertisement"),
-                          "neighbrsol" => gettext("Neighbor solicitation"),
-                          "neighbradv" => gettext("Neighbor advertisement"),
-                          "redir" => gettext("Shorter route exists"),
-                          "routrrenum" => gettext("Route renumbering"),
-                          "fqdnreq" => gettext("FQDN query"),
-                          "niqry" => gettext("Node information query"),
-                          "wrureq" => gettext("Who-are-you request"),
-                          "fqdnrep" => gettext("FQDN reply"),
-                          "nirep" => gettext("Node information reply"),
-                          "wrurep" => gettext("Who-are-you reply"),
-                          "mtraceresp" => gettext("mtrace response"),
-                          "mtrace" => gettext("mtrace messages")
-                      );
-
-                      foreach ($icmp6types as $icmp6type => $descr): ?>
-                        <option value="<?=$icmp6type;?>" <?= $icmp6type == $pconfig['icmp6-type'] ? "selected=\"selected\"" : ""; ?>>
-                          <?=$descr;?>
-                        </option>
+                        endforeach; ?>
+                        </select>
+                        <div class="hidden" data-for="help_for_icmptype_<?=$p;?>">
+                          <?=sprintf(gettext("If you selected ICMP as the protocol above, you may specify one or more %s ICMP types here."), $icmptypes[$p]['ipproto_name']);?> <br />
+                          <?=gettext("Leave blank to specify all valid ICMP types. Selecting 'any' will also clear the selection.");?>
+                        </div>
+                      </td>
+                    </tr>
 <?php
-                      endforeach; ?>
-                      </select>
-                      <div class="hidden" data-for="help_for_icmp6-type">
-                        <?=gettext("If you selected ICMP6 for the protocol above, you may specify an ICMP6 type here.");?>
-                      </div>
-                    </td>
-                  </tr>
+                  endforeach; ?>
                   <tr>
                     <td> <a id="help_for_src_invert" href="#" class="showhelp"><i class="fa fa-info-circle"></i></a> <?=gettext("Source") . " / ".gettext("Invert");?> </td>
                     <td>
@@ -1596,7 +1647,7 @@ include("head.inc");
                       <td>&nbsp;</td>
                       <td>
                         <input name="Submit" type="submit" class="btn btn-primary" value="<?=html_safe(gettext('Save')); ?>" />
-                        <input type="button" class="btn btn-default" value="<?=html_safe(gettext('Cancel'));?>" onclick="window.location.href='/firewall_rules.php?if=<?= !empty($pconfig['floating']) ? 'FloatingRules' : $pconfig['interface'] ?>'" />
+                        <input type="button" class="btn btn-default" value="<?=html_safe(gettext('Cancel'));?>" onclick="window.location.href='/firewall_rules.php?if=<?= !empty($pconfig['floating']) ? 'FloatingRules' : $interface_from_url ?>'" />
                       </td>
                     </tr>
                   </table>
