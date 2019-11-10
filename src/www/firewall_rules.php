@@ -32,110 +32,92 @@ require_once("guiconfig.inc");
 require_once("filter.inc");
 require_once("system.inc");
 
+$icmptypes = get_icmptypes(true); // get raw icmptypes list
+
 /***********************************************************************************************************
  * format functions for this page
  ***********************************************************************************************************/
 function firewall_rule_item_proto($filterent)
 {
     // construct line ipprotocol
+    global $icmptypes;
+
+    // when ipprotocol is not set, pf would normally figure out the ip proto itself.
+    // reconstruct ipproto depending on source/destination address.
     if (isset($filterent['ipprotocol'])) {
-        switch($filterent['ipprotocol']) {
-            case "inet":
-                $record_ipprotocol = "IPv4 ";
-                break;
-            case "inet6":
-                $record_ipprotocol = "IPv6 ";
-                break;
-            case "inet46":
-                $record_ipprotocol = "IPv4+6 ";
-                break;
-        }
+        $protocol = $icmptypes[$filterent['ipprotocol']]['proto_shortname'] . ' ';
+    } elseif (!empty($filterent['from']) && is_ipaddr(explode("/", $filterent['from'])[0])) {
+        $protocol = strpos($filterent['from'], ":") === false ? "IPv4 " :  "IPv6 ";
+    } elseif (!empty($filterent['to']) && is_ipaddr(explode("/", $filterent['to'])[0])) {
+        $protocol = strpos($filterent['to'], ":") === false ? "IPv4 " :  "IPv6 ";
+    } elseif (isset($filterent['source']['address']) && is_ipaddr(explode("/", $filterent['source']['address'])[0])) {
+        $protocol = strpos($filterent['source']['address'], ":") === false ? "IPv4 " : "IPv6 ";
+    } elseif (isset($filterent['destination']['address']) && is_ipaddr(explode("/", $filterent['destination']['address'])[0])) {
+        $protocol = strpos($filterent['destination']['address'], ":") === false ? "IPv4 " : "IPv6 ";
     } else {
-        // when ipprotocol is not set, pf would normally figure out the ip proto itself.
-        // reconstruct ipproto depending on source/destination address.
-        if (!empty($filterent['from']) && is_ipaddr(explode("/", $filterent['from'])[0])) {
-            $record_ipprotocol = strpos($filterent['from'], ":") === false ? "IPv4 " :  "IPv6 ";
-        } elseif (!empty($filterent['to']) && is_ipaddr(explode("/", $filterent['to'])[0])) {
-            $record_ipprotocol = strpos($filterent['to'], ":") === false ? "IPv4 " :  "IPv6 ";
-        } elseif (isset($filterent['source']['address'])
-                    && is_ipaddr(explode("/", $filterent['source']['address'])[0])) {
-            $record_ipprotocol = strpos($filterent['source']['address'], ":") === false ? "IPv4 " : "IPv6 ";
-        } elseif (isset($filterent['destination']['address'])
-                    && is_ipaddr(explode("/", $filterent['destination']['address'])[0])) {
-            $record_ipprotocol = strpos($filterent['destination']['address'], ":") === false ? "IPv4 " : "IPv6 ";
-        } else {
-            $record_ipprotocol = "IPv4+6 ";
+        $protocol = "IPv4+6 ";
+    }
+    // If not ICMP, we're done
+    if (!isset($filterent['protocol']) || $filterent['protocol'] != "icmp") {
+        return $protocol . (isset($filterent['protocol']) ? strtoupper(htmlspecialchars($filterent['protocol'])) : "*");
+    }
+
+    // Otherwise, add ICMP type(s) + hover info to the result 
+    $types = array();
+    $types_info = array();
+    if (!empty($filterent['icmptype'])) {
+        foreach (explode(',', $filterent['icmptype']) as $type) {
+            if (empty($icmptypes[$type]['descrip'])) {
+                $types[] = $type;
+                $types_info[] = "Unknown  ($type)";
+            } else {
+//                $types[] = htmlspecialchars($icmptypes[$type]['descrip']);
+                $types[] = $type;
+                $types_info[] = htmlspecialchars($icmptypes[$type]['descrip']) . "  ($type)";
+            }
         }
+        // data-html true = respect <br/> in tooltips
+        $hovertext = sprintf(" data-toggle='tooltip' data-html='true' title='ICMP types:<br/>%s'", implode("<br />", $types_info));
     }
-    $icmptypes = array(
-      "" => gettext("any"),
-      "echoreq" => gettext("Echo Request"),
-      "echorep" => gettext("Echo Reply"),
-      "unreach" => gettext("Destination Unreachable"),
-      "squench" => gettext("Source Quench (Deprecated)"),
-      "redir" => gettext("Redirect"),
-      "althost" => gettext("Alternate Host Address (Deprecated)"),
-      "routeradv" => gettext("Router Advertisement"),
-      "routersol" => gettext("Router Solicitation"),
-      "timex" => gettext("Time Exceeded"),
-      "paramprob" => gettext("Parameter Problem"),
-      "timereq" => gettext("Timestamp"),
-      "timerep" => gettext("Timestamp Reply"),
-      "inforeq" => gettext("Information Request (Deprecated)"),
-      "inforep" => gettext("Information Reply (Deprecated)"),
-      "maskreq" => gettext("Address Mask Request (Deprecated)"),
-      "maskrep" => gettext("Address Mask Reply (Deprecated)")
-    );
-    $icmp6types = array(
-      "" => gettext("any"),
-      "unreach" => gettext("Destination unreachable"),
-      "toobig" => gettext("Packet too big"),
-      "timex" => gettext("Time exceeded"),
-      "paramprob" => gettext("Invalid IPv6 header"),
-      "echoreq" => gettext("Echo service request"),
-      "echorep" => gettext("Echo service reply"),
-      "groupqry" => gettext("Group membership query"),
-      "listqry" => gettext("Multicast listener query"),
-      "grouprep" => gettext("Group membership report"),
-      "listenrep" => gettext("Multicast listener report"),
-      "groupterm" => gettext("Group membership termination"),
-      "listendone" => gettext("Multicast listener done"),
-      "routersol" => gettext("Router solicitation"),
-      "routeradv" => gettext("Router advertisement"),
-      "neighbrsol" => gettext("Neighbor solicitation"),
-      "neighbradv" => gettext("Neighbor advertisement"),
-      "redir" => gettext("Shorter route exists"),
-      "routrrenum" => gettext("Route renumbering"),
-      "fqdnreq" => gettext("FQDN query"),
-      "niqry" => gettext("Node information query"),
-      "wrureq" => gettext("Who-are-you request"),
-      "fqdnrep" => gettext("FQDN reply"),
-      "nirep" => gettext("Node information reply"),
-      "wrurep" => gettext("Who-are-you reply"),
-      "mtraceresp" => gettext("mtrace response"),
-      "mtrace" => gettext("mtrace messages")
-    );
-    if (isset($filterent['protocol']) && $filterent['protocol'] == "icmp" && !empty($filterent['icmptype'])) {
-        $result = $record_ipprotocol;
-        $result .= sprintf(
-          "<span data-toggle=\"tooltip\" title=\"ICMP type: %s \"> %s </span>",
-          html_safe($icmptypes[$filterent['icmptype']]),
-          isset($filterent['protocol']) ? strtoupper($filterent['protocol']) : "*"
-        );
-        return $result;
-    } elseif (isset($filterent['protocol']) && !empty($filterent['icmp6-type'])) {
-        $result = $record_ipprotocol;
-        $result .= sprintf(
-          "<span data-toggle=\"tooltip\" title=\"ICMP6 type: %s \"> %s </span>",
-          html_safe($icmp6types[$filterent['icmp6-type']]),
-          isset($filterent['protocol']) ? strtoupper($filterent['protocol']) : "*"
-        );
-        return $result;
+
+    $c = count($types);
+    if ($c == 0) {
+        $text_short  = "ICMP (any)";
+        $text_detail = "ICMP (any)";
+    } elseif ($c <= 2) {
+        $text_short  = "ICMP (+$c)";
+        $text_detail = "ICMP<br />(" . $filterent['icmptype'] . ')';
     } else {
-        return $record_ipprotocol . (isset($filterent['protocol']) ? strtoupper($filterent['protocol']) : "*");
+        $text_short  = "ICMP (+$c)";
+        $text_detail = sprintf("ICMP<br />(%s, %s ... + %d)", $types[0], $types[1], $c - 2);
     }
+
+    return "$protocol <span $hovertext><span class='view-simpleinfo-only'>$text_short</span><span class='view-fullinfo'>$text_detail</span></span>";
 }
 
+function firewall_rule_item_interfaces($filterent)
+{
+    // construct line interfaces for detailed view
+    if (empty($filterent['interface'])) {
+        return "<span class='text-info' data-toggle='tooltip' title='All'>*</span>";
+    }
+    $interfaces = legacy_config_get_interfaces();
+    $iflist = explode(',', $filterent['interface']);
+    $out = array();
+    foreach ($iflist as $if) {
+        if (!empty($interfaces[$if])) {
+            $ifdata = $interfaces[$if];
+            $name = !empty($ifdata['descr']) ? $ifdata['descr'] : $if;
+            $phy = $ifdata['if'];
+            $hover = $phy . (strcasecmp($if, $name) ? ' (' . $if . ')' : "");
+        } else {
+            $name = $if;
+            $hover = "No details";
+        }
+        $out[] = sprintf("<span class='text-info' data-toggle='tooltip' title='%s'>%s</span>", htmlspecialchars($hover), strtoupper(htmlspecialchars($name)));
+    }
+    return implode(', ', $out);
+}
 
 function firewall_rule_item_icons($filterent)
 {
@@ -556,19 +538,52 @@ $( document ).ready(function() {
   $("#category_block").detach().appendTo($(".page-content-head > .container-fluid > .list-inline"));
   $("#category_block").addClass("pull-right");
 
-  $("#btn_inspect").click(function(){
+  function update_table_layout()
+  {
+    let infomode = $("#btn_detail").data('mode');
+    let statsmode = $("#btn_stats").data('mode');
+    if (statsmode === 'stats') {
+      $(".view-stats").show();
+      $(".view-info").hide();
+      $(".view-fullinfo").hide();
+      $(".view-simpleinfo-only").hide();
+    } else {
+      $(".view-stats").hide();
+      $(".view-info").show();
+      if (infomode === 'detail') {
+        $(".view-simpleinfo-only").hide();
+        $(".view-fullinfo").show();
+      } else {
+        $(".view-simpleinfo-only").show();
+        $(".view-fullinfo").hide();
+      }
+    }
+  }
+
+  $("#btn_detail").click(function(){
+      let mode = $(this).data('mode');
+      if (mode === 'detail') {
+            $(this).removeClass('active');
+            $(this).data('mode', 'simple');
+      } else {
+            $(this).addClass('active');
+            $(this).data('mode', 'detail');
+      }
+      update_table_layout();
+      $(this).blur();
+  });
+
+
+  $("#btn_stats").click(function(){
       let mode = $(this).data('mode');
       if (mode === 'stats') {
-            $(".view-stats").hide();
-            $(".view-info").show();
             $(this).removeClass('active');
             $(this).data('mode', 'info');
       } else {
-            $(".view-stats").show();
-            $(".view-info").hide();
             $(this).addClass('active');
             $(this).data('mode', 'stats');
       }
+      update_table_layout();
       $(this).blur();
   });
 
@@ -608,6 +623,9 @@ $( document ).ready(function() {
     .view-stats {
         display: none;
     }
+    .view-fullinfo {
+        display: none;
+    }
     .button-th {
         width: 150px;
     }
@@ -634,9 +652,13 @@ $( document ).ready(function() {
 <?php
             endforeach;?>
         </select>
-        <button id="btn_inspect" class="btn btn-default hidden-xs">
+        <button id="btn_detail" class="btn btn-default hidden-xs">
           <i class="fa fa-eye" aria-hidden="true"></i>
-          <?=gettext("Inspect");?>
+          <?=gettext("Detail");?>
+        </button>
+        <button id="btn_stats" class="btn btn-default hidden-xs">
+          <i class="fa fa-eye" aria-hidden="true"></i>
+          <?=gettext("Statistics");?>
         </button>
     </div>
   </div>
@@ -690,6 +712,11 @@ $( document ).ready(function() {
                     <tr>
                       <td><input type="checkbox" id="selectAll"></td>
                       <td>&nbsp;</td>
+<?php if ($selected_if == "FloatingRules"): ?>
+                      <td class="view-fullinfo">
+                        <strong><?= gettext('Interfaces') ?></strong>
+                      </td>
+<?php endif; ?>
                       <td class="view-info"><strong><?= gettext('Protocol') ?></strong></td>
                       <td class="view-info"><strong><?= gettext('Source') ?></strong></td>
                       <td class="view-info hidden-xs hidden-sm"><strong><?= gettext('Port') ?></strong></td>
@@ -710,6 +737,10 @@ $( document ).ready(function() {
                   <tr id="expand-internal-rules" style="display: none;">
                       <td><i class="fa fa-folder-o text-muted"></i></td>
                       <td></td>
+<?php if ($selected_if == "FloatingRules"): ?>
+                      <td class="view-fullinfo">
+                      </td>
+<?php endif; ?>
                       <td class="view-info" colspan="2"> </td>
                       <td class="view-info hidden-xs hidden-sm" colspan="5"> </td>
                       <td colspan="2" class="view-stats hidden-xs hidden-sm"></td>
@@ -744,6 +775,11 @@ $( document ).ready(function() {
                           <?=firewall_rule_item_icons($filterent);?>
                           <i class="<?=firewall_rule_item_log($filterent);?>"></i>
                       </td>
+<?php if ($selected_if == "FloatingRules"): ?>
+                      <td class="view-fullinfo">
+                        <?=firewall_rule_item_interfaces($filterent);?>
+                      </td>
+<?php endif; ?>
                       <td class="view-info">
                           <?=firewall_rule_item_proto($filterent);?>
                       </td>
@@ -799,6 +835,11 @@ $( document ).ready(function() {
                       <?=firewall_rule_item_icons($filterent);?>
                       <i class="act_log <?= firewall_rule_item_log($filterent) ?>" style="cursor: pointer;" id="toggle_<?=$i;?>" data-toggle="tooltip" title="<?= html_safe(empty($filterent['log']) ? gettext('Enable logging') : gettext('Disable logging')) ?>"></i>
                     </td>
+<?php if ($selected_if == "FloatingRules"): ?>
+                      <td class="view-fullinfo">
+                        <?=firewall_rule_item_interfaces($filterent);?>
+                      </td>
+<?php endif; ?>
                     <td class="view-info">
                         <?=firewall_rule_item_proto($filterent);?>
                     </td>
