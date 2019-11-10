@@ -846,7 +846,7 @@ function get_protocols()
 
 function get_icmptypes($raw = false)
 {
-    // Get ICMP types data. if $raw is true, just return the basiuc raw table
+    // Get ICMP types data. if $raw is true, just return the basic raw table
     $icmptypes_raw = array(
         'althost'    => array('descrip' => 'Alternate host address (Deprecated)', 'valid4' => true, 'valid6' => false), 
          'dataconv'    => array('descrip' => 'Datagram conversion error', 'valid4' => true, 'valid6' => false), 
